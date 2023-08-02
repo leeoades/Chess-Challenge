@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using ChessChallenge.API;
 
@@ -24,10 +25,39 @@ public class MyBot : IChessBot
         // Hanging pieces?
         if (CaptureHangingPiece(board, out var captureHangingPieceMove)) return captureHangingPieceMove;
 
+        // Capture Better Piece - win the exchange
+        if (CanCaptureBetterPiece(board, out var captureBetterPiece))
+        {
+            Debug.WriteLine("I can capture a better piece here - " + captureBetterPiece);
+            return captureBetterPiece;
+        }
+        
         // Move my piece away from danger
         if (RespondToThreatenedPieces(board, out var moveThreatenedPieceMove)) return moveThreatenedPieceMove;
         
         return GetRandomMove(board);
+    }
+
+    private bool CanCaptureBetterPiece(Board board, out Move finalMove)
+    {
+        finalMove = board.GetLegalMoves(true).Where(mv => mv.CapturePieceType > mv.MovePieceType).OrderBy(mv => mv.CapturePieceType).FirstOrDefault();
+        return board.GetLegalMoves(true).Where(mv => mv.CapturePieceType > mv.MovePieceType).OrderBy(mv => mv.CapturePieceType).FirstOrDefault() != default;
+    }
+
+    private bool IsBadMove(Board board, Move move)
+    {
+        board.MakeMove(move);
+        try
+        {
+            // Is stalemate?
+            if (!board.GetLegalMoves().Any()) return true;
+            
+            return false;
+        }
+        finally
+        {
+            board.UndoMove(move);
+        }
     }
 
     private bool RespondToThreatenedPieces(Board board, out Move finalMove)
@@ -36,6 +66,8 @@ public class MyBot : IChessBot
 
         foreach (var threatenedPiece in myThreatenedPieces)
         {
+            Debug.WriteLine("My piece is being attacked: " + threatenedPiece);
+
             if (RespondToThreatOnMyPiece(board, threatenedPiece, out Move move))
             {
                 finalMove = move;
@@ -93,6 +125,11 @@ public class MyBot : IChessBot
                     // Move to the first safe square
                     if (IfPieceMovesToSquareIsItSafe(board, myPiece, potentialMove))
                     {
+                        // Skip bad moves
+                        if (IsBadMove(board, potentialMove)) continue;
+                        
+                        Debug.WriteLine(myPiece + " is in trouble so moving it to " + potentialMove.TargetSquare);
+
                         finalMove = potentialMove;
                         return true;
                     }
@@ -133,7 +170,11 @@ public class MyBot : IChessBot
     private bool GetSafePlaceToEscape(Board board, Piece piece, out Move finalMove)
     {
         var myMoves = board.GetLegalMoves().Where(m => m.StartSquare == piece.Square).ToArray();
-        var safeSquareMoves = myMoves.Where(m => !board.SquareIsAttackedByOpponent(m.TargetSquare)).ToArray();
+        var safeSquareMoves = myMoves
+            .Where(m => !board.SquareIsAttackedByOpponent(m.TargetSquare))
+            .Where(m => !IsBadMove(board, m))
+            .ToArray();
+        
         if (safeSquareMoves.Any())
         {
             finalMove = safeSquareMoves.First();
@@ -145,7 +186,7 @@ public class MyBot : IChessBot
 
     private bool CaptureHangingPiece(Board board, out Move finalMove)
     {
-        var allCaptures = board.GetLegalMoves(true);
+        var allCaptures = board.GetLegalMoves(true).OrderByDescending(mv => mv.CapturePieceType);
         foreach (var captureMove in allCaptures)
         {
             var squareOfCapture = captureMove.TargetSquare;
@@ -153,11 +194,13 @@ public class MyBot : IChessBot
             {
                 board.MakeMove(captureMove);
                 
-                // Opponent captures
+                // Can the Opponent recapture?
                 var opponentCaptures = board.GetLegalMoves(true);
                 var opponentCanRecapture = opponentCaptures.Any(c => c.TargetSquare == squareOfCapture);
                 if (!opponentCanRecapture)
                 {
+                    // Nope - so piece is hanging
+                    Debug.WriteLine("I found a hanging piece to capture. Nom");
                     finalMove = captureMove;
                     return true;
                 }
@@ -176,8 +219,14 @@ public class MyBot : IChessBot
 
     private Move GetRandomMove(Board board)
     {
+        Debug.WriteLine("Resort to random move.");
+
         var legalMoves = board.GetLegalMoves();
-        return legalMoves[_random.Next(legalMoves.Length)];
+        var firstGoodMove = legalMoves.FirstOrDefault(mv => !IsBadMove(board, mv));
+        return 
+            firstGoodMove != default 
+                ? firstGoodMove 
+                : legalMoves[0];
     }
 
     private bool FindForcedMate(Board board, out Move finalMove)
@@ -186,6 +235,7 @@ public class MyBot : IChessBot
         {
             if (DoesMoveLeadToForcesMate(board, move))
             {
+                Debug.WriteLine("I found a forced checkmate.");
                 finalMove = move;
                 return true;
             }
